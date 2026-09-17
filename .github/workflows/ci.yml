@@ -1,0 +1,117 @@
+name: CSI CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ACR_NAME: tabishintelregistry
+  ACR_LOGIN_SERVER: tabishintelregistry-eadmbcfwh2ech7ay.azurecr.io
+  IMAGE_NAME: csi-app
+  RESOURCE_GROUP: rg-intel-classifier
+  CONTAINER_APP_NAME: csi-investigation
+
+jobs:
+  frontend-checks:
+    name: Test and build React frontend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run automated tests
+        run: npm test -- --watchAll=false
+        env:
+          CI: "true"
+
+      - name: Create production build
+        run: npm run build
+        env:
+          CI: "true"
+
+  docker-build:
+    name: Build, scan and deploy Docker image
+    runs-on: ubuntu-latest
+    needs: frontend-checks
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build CSI Docker image
+        run: docker build --tag $IMAGE_NAME:${{ github.sha }} .
+
+      - name: Scan Docker image for vulnerabilities
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 0 \
+            $IMAGE_NAME:${{ github.sha }}
+
+      - name: Sign in to Azure using OIDC
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to Azure Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: az acr login --name $ACR_NAME
+
+      - name: Tag and push Docker image to ACR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker tag \
+            $IMAGE_NAME:${{ github.sha }} \
+            $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+          docker push \
+            $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+      - name: Deploy image to Azure Container Apps
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          az containerapp update \
+            --name $CONTAINER_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}
+
+      - name: Show deployed application URL
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          APP_FQDN=$(az containerapp show \
+            --name $CONTAINER_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+
+          echo "Application deployed at: https://$APP_FQDN"
