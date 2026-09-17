@@ -1,0 +1,46 @@
+name: Frontend CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-checks:
+    name: Test and build React frontend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run automated tests
+        run: npm test -- --watchAll=false
+        env:
+          CI: "true"
+
+      - name: Create production build
+        run: npm run build
+        env:
+          CI: "true"

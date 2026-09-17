@@ -1,8 +1,27 @@
 import { render, screen } from '@testing-library/react';
+import axios from 'axios';
 import App from './App';
 
-test('renders learn react link', () => {
+jest.mock('axios');
+
+test('renders and loads the AI Crime Scene Investigation dashboard', async () => {
+  axios.get.mockResolvedValueOnce({ data: [] });
+
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+
+  expect(
+    await screen.findByText(/No cases yet/i)
+  ).toBeInTheDocument();
+
+  expect(
+    screen.getByRole('heading', {
+      name: /AI Crime Scene Investigation/i
+    })
+  ).toBeInTheDocument();
+
+  expect(
+    screen.getByRole('heading', {
+      name: /Create New Case/i
+    })
+  ).toBeInTheDocument();
 });
